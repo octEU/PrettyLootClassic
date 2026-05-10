@@ -1,0 +1,18 @@
+## Interface: 11508
+## Title: PrettyLoot
+## Notes: Clean and modern loot display.
+## Author: Oct
+## Version: 1.0
+
+## SavedVariables: PrettyLootDB
+## IconTexture: Interface\Addons\PrettyLoot\Media\prettyloot64.tga
+
+## OptionalDeps: AceConfig-3.0, AceConfigDialog-3.0, AceAddon-3.0
+## X-Embeds: AceAddon-3.0, AceEvent-3.0, AceConsole-3.0, AceDB-3.0, AceConfig-3.0
+## DefaultState: Enabled
+
+# Embedded libraries
+Libs\embeds.xml
+
+# Addon code
+PrettyLoot.lua
