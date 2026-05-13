@@ -16,3 +16,5 @@ Libs\embeds.xml
 
 # Addon code
 PrettyLoot.lua
+
+## X-Curse-Project-ID: 1539899
