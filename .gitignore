@@ -1,0 +1,11 @@
+# WoW generated files
+*.bak
+*.tmp
+
+# OS files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Release output from packager
+.release/
