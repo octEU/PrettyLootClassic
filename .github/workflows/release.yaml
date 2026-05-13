@@ -22,3 +22,4 @@ jobs:
         env:
           CF_API_KEY: ${{ secrets.CF_API_KEY }}
           CURSEFORGE_ID: 1539899
+          GITHUB_OAUTH: ${{ secrets.GITHUB_TOKEN }}
