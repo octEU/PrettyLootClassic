@@ -1625,9 +1625,12 @@ function PrettyLoot:CHAT_MSG_LOOT(event, message, _, _, _, sender)
         if lower:find("^greed roll")
         or lower:find("^need roll")
         or lower:find("^you have selected")
+        or lower:find("selected need for:")
+        or lower:find("selected greed for:")
         or lower:find("passed on:")
         or lower:find("you won:")
-        or lower:find("receives loot:")  -- another player won a group roll
+        or lower:find("won:")
+        or lower:find("receives loot:")
         then
             return
         end
