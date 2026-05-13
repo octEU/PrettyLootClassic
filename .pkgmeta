@@ -3,21 +3,6 @@ package-as: PrettyLoot
 curse-project-id: 1539899
 curse-slug: prettyloot
 
-# External Libraries
-externals:
-  Libs/LibStub: https://github.com/Lua-WoW/LibStub.git
-  Libs/CallbackHandler-1.0: https://github.com/Lua-WoW/CallbackHandler.git
-  Libs/AceAddon-3.0: https://github.com/Lua-WoW/Ace3.git/AceAddon-3.0
-  Libs/AceEvent-3.0: https://github.com/Lua-WoW/Ace3.git/AceEvent-3.0
-  Libs/AceTimer-3.0: https://github.com/Lua-WoW/Ace3.git/AceTimer-3.0
-  Libs/AceDB-3.0: https://github.com/Lua-WoW/Ace3.git/AceDB-3.0
-  Libs/AceDBOptions-3.0: https://github.com/Lua-WoW/Ace3.git/AceDBOptions-3.0
-  Libs/AceConsole-3.0: https://github.com/Lua-WoW/Ace3.git/AceConsole-3.0
-  Libs/AceGUI-3.0: https://github.com/Lua-WoW/Ace3.git/AceGUI-3.0
-  Libs/AceConfig-3.0: https://github.com/Lua-WoW/Ace3.git/AceConfig-3.0
-  Libs/AceSerializer-3.0: https://github.com/Lua-WoW/Ace3.git/AceSerializer-3.0
-  Libs/LibSharedMedia-3.0: https://github.com/Lua-WoW/LibSharedMedia-3.0.git
-
 # Ignore Rules
 ignore:
   - .git
