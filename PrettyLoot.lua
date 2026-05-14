@@ -1597,31 +1597,27 @@ end
 -- =========================================================================
 -- Event handlers
 -- =========================================================================
-function PrettyLoot:CHAT_MSG_LOOT(event, message, _, _, _, sender)
-    local playerName = UnitName("player")
-    local senderName = sender and sender:match("^[^-]+")
-    if senderName and senderName ~= playerName then return end
+function PrettyLoot:CHAT_MSG_LOOT(event, message)
+    if not message then return end
 
-    -- When no sender is present, require the message to reference the player directly
-    -- to avoid showing loot messages from other nearby players.
-    if not senderName then
-        if message then
-            local lowerMsg = string.lower(message)
-            local hasYou = lowerMsg:find("you ") or lowerMsg:find("you,") or lowerMsg:find("you.")
-            local hasPlayerName = message:find(playerName, 1, true)
-            if not hasYou and not hasPlayerName then
-                return
-            end
-        else
-            return
-        end
+    local playerName = UnitName("player")
+
+    -- Only process canonical loot receipt messages for the player.
+    -- This avoids:
+    --   * other players winning rolls showing in the display
+    --   * duplicate x2 loot entries from secondary loot events
+    local isPlayerLoot =
+        message:find("^You receive loot:")
+        or message:find("^" .. playerName .. " receives loot:")
+
+    if not isPlayerLoot then
+        return
     end
 
-    -- Filter out roll/need/greed system messages that are not actual loot awards.
-    -- Matches against known system message structures rather than keywords, to avoid
-    -- false matches on item names (e.g. "Scroll", "Needle", "Candle").
+    -- Ignore roll-selection and roll-result spam.
     if message then
         local lower = string.lower(message)
+
         if lower:find("^greed roll")
         or lower:find("^need roll")
         or lower:find("^you have selected")
@@ -1630,7 +1626,6 @@ function PrettyLoot:CHAT_MSG_LOOT(event, message, _, _, _, sender)
         or lower:find("passed on:")
         or lower:find("you won:")
         or lower:find("won:")
-        or lower:find("receives loot:")
         then
             return
         end
@@ -1638,13 +1633,20 @@ function PrettyLoot:CHAT_MSG_LOOT(event, message, _, _, _, sender)
 
     local itemLink = string.match(message or "", "|Hitem:.-|h.-|h|r")
     if not itemLink then return end
+
     local quantity = tonumber(string.match(message, "x(%d+)")) or 1
     local itemID = tonumber(string.match(itemLink, "item:(%d+)"))
-    if not itemID or itemID == 0 then return end
+
+    if not itemID or itemID == 0 then
+        return
+    end
+
     local itemName, _, itemQuality, _, _, _, _, _, _, itemIcon = GetItemInfo(itemLink)
+
     itemName = itemName or string.match(message, "%[(.-)%]") or "Unknown Item"
     itemIcon = itemIcon or DEFAULT_ICON
     itemQuality = itemQuality or DEFAULT_QUALITY
+
     local colorCode = qualityColors[itemQuality] or qualityColors[1]
 
     ClearPreviewLines()
