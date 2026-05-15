@@ -1608,6 +1608,7 @@ function PrettyLoot:CHAT_MSG_LOOT(event, message)
     --   * duplicate x2 loot entries from secondary loot events
     local isPlayerLoot =
         message:find("^You receive loot:")
+		or message:find("^You create:")
 		or message:find("^You receive item:")
         or message:find("^" .. playerName .. " receives loot:")
 
