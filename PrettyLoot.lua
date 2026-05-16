@@ -3,7 +3,12 @@
 local addonName, PL = ...
 
 -- =========================================================================
--- 1. Libraries & SavedVariables
+-- 1. Version
+-- =========================================================================
+local PRETTYLOOT_VERSION = "1.0.0"
+
+-- =========================================================================
+-- 2. Libraries & SavedVariables
 -- =========================================================================
 local AceAddon = LibStub("AceAddon-3.0")
 local AceDB = LibStub("AceDB-3.0")
@@ -27,7 +32,7 @@ local function DeepCopy(orig)
 end
 
 -- =========================================================================
--- 2. Defaults
+-- 3. Defaults
 -- =========================================================================
 local defaults = {
     profile = {
@@ -43,12 +48,11 @@ local defaults = {
         rowSpacing = 2,
         fontKey = "Expressway",
 
-        -- durations
+        -- duration
         holdDuration = 10,
-        durationHighlight = 10,
 
         trackReputation = true,
-        trackAuctions = true,
+        trackAuctions = false,
 
         blacklist = "",
         highlight = "",
@@ -56,11 +60,8 @@ local defaults = {
         playSoundOnHighlight = false,
         highlightSound = "",
 
-        -- pinning options
-        goldStaysOnTop = true,
-
         -- highlight visual style
-        highlightStyle = "goldbrackets", -- "background" or "goldbrackets"
+        highlightStyle = "goldbrackets",
         highlightBackgroundColour = { r = 0.4, g = 0.2, b = 0.7, a = 0.25 },
 
         -- layout tuning
@@ -68,13 +69,14 @@ local defaults = {
         iconGapNoIcon = 2,
         indicatorVerticalOffset = 0,
 
-        -- new behaviour
+        -- behaviour
         fadeAsGroup = true,
+        stackDuplicates = true,
     }
 }
 
 -- =========================================================================
--- 3. Constants & helpers
+-- 4. Constants & helpers
 -- =========================================================================
 local SLIDE_SPEED = 300
 local SLIDE_DISTANCE_MAX = 140
@@ -120,10 +122,6 @@ local parsedHighlight = {}
 local parsedHighlightPatterns = {}
 
 PL._newProfileName = ""
-
-local function GetHighlightDuration()
-    return PL.db.profile.durationHighlight or PL.db.profile.holdDuration or 10
-end
 
 local function GetBaseDurationForLine()
     return PL.db.profile.holdDuration or 10
@@ -234,14 +232,11 @@ local function IsHighlighted(itemKey, displayName)
 end
 
 -- =========================================================================
--- Priority: support optional "stays on top" pinning
+-- Priority: gold always stays on top, followed by auctions, reputation, items
 -- =========================================================================
 local function getPriority(line)
-    local goldPinned = PL and PL.db and PL.db.profile and PL.db.profile.goldStaysOnTop
-
-    if line.isMoney and goldPinned then return 0 end
-    if line.isMoney    then return 1 end
-    if line.isAuction  then return 2 end
+    if line.isMoney      then return 0 end
+    if line.isAuction    then return 2 end
     if line.isReputation then return 3 end
     return 4
 end
@@ -265,7 +260,7 @@ local function InsertLineByPriority(newLine)
     if not inserted then table.insert(activeLines, newLine) end
 end
 
--- Removes overflow entries when activeLines exceeds maxItems, starting from the lowest priority.
+-- Removes overflow entries when activeLines exceeds maxItems, starting from the lowest-priority (bottom) line.
 local function RemoveLowestPriorityLine()
     local maxItems = PL.db.profile.maxItems or 10
     while #activeLines > maxItems do
@@ -279,6 +274,13 @@ end
 -- =========================================================================
 -- Preview helpers
 -- =========================================================================
+local function HasPreviewLines()
+    for _, line in ipairs(activeLines) do
+        if line.isPreview then return true end
+    end
+    return false
+end
+
 local function ClearPreviewLines()
     local i = 1
     while i <= #activeLines do
@@ -572,16 +574,26 @@ local function AddOrUpdateLoot(key, iconPath, textHtml, quantity, isMoney, isCur
     local styleSettingIsGoldBrackets = (PL.db.profile.highlightStyle or "") == "goldbrackets"
     local isHighlightEntry = IsHighlighted(key, displayName) or key == "PREVIEW_HIGHLIGHT_ITEM"
 
+    -- When stacking is disabled for regular items, skip the merge search so every
+    -- loot event for the same item creates a fresh line below the existing one.
+    local allowStack = isPreview
+        or isMoney
+        or isCurrency
+        or (type(key) == "string" and (key:match("^REPUTATION_") or key:match("^AUCTION_")))
+        or PL.db.profile.stackDuplicates
+
     local line
-    for _, l in ipairs(activeLines) do
-        if l.itemKey == key and ((l.isPreview and isPreview) or (not l.isPreview and not isPreview)) then
-            if l.timer and l.timer <= 0 then
-                -- Line is fading — don't merge into it, remove it and let a new line be created
-                RemoveLine(l)
-                break
-            else
-                line = l
-                break
+    if allowStack then
+        for _, l in ipairs(activeLines) do
+            if l.itemKey == key and ((l.isPreview and isPreview) or (not l.isPreview and not isPreview)) then
+                if l.timer and l.timer <= 0 then
+                    -- Line is fading — don't merge into it, remove it and let a new line be created
+                    RemoveLine(l)
+                    break
+                else
+                    line = l
+                    break
+                end
             end
         end
     end
@@ -670,23 +682,14 @@ local function AddOrUpdateLoot(key, iconPath, textHtml, quantity, isMoney, isCur
         end
 
         line.text:SetText(finalText)
-
-        if line.highlighted then
-            line.timer = GetHighlightDuration()
-        else
-            line.timer = GetBaseDurationForLine(line)
-        end
+        line.timer = GetBaseDurationForLine()
 
         -- When fadeAsGroup is enabled, refreshing any line also resets timers for all
         -- other active lines, provided no cascade is already in progress.
         if not isPreview and PL.db.profile.fadeAsGroup and not cascadeState.active then
             for _, other in ipairs(activeLines) do
                 if other ~= line and other.timer and other.timer > 0 and not other._fadingStarted then
-                    if other.highlighted then
-                        other.timer = GetHighlightDuration()
-                    else
-                        other.timer = GetBaseDurationForLine(other)
-                    end
+                    other.timer = GetBaseDurationForLine()
                     other:SetAlpha(1)
                     other.slideX = 0
                     other:SetPoint("TOPLEFT", other.anchorRef or UIParent, other.anchorPoint or "TOPLEFT", other.slideX, other.anchorYOffset or 0)
@@ -713,7 +716,7 @@ local function AddOrUpdateLoot(key, iconPath, textHtml, quantity, isMoney, isCur
             line.currentCount = quantity
         end
         line.isMoney = isMoney and true or nil
-        line.timer = GetBaseDurationForLine(line)
+        line.timer = GetBaseDurationForLine()
 
         local finalText = ""
 
@@ -798,7 +801,6 @@ local function AddOrUpdateLoot(key, iconPath, textHtml, quantity, isMoney, isCur
 
         if isHighlightEntry then
             line.highlighted = true
-            line.timer = GetHighlightDuration()
             StartHighlightVisual(line)
             if PL.db.profile.playSoundOnHighlight and not isPreview then
                 local now = GetTime()
@@ -824,11 +826,7 @@ local function AddOrUpdateLoot(key, iconPath, textHtml, quantity, isMoney, isCur
         if not isPreview and PL.db.profile.fadeAsGroup and not cascadeState.active then
             for _, other in ipairs(activeLines) do
                 if other ~= line and other.timer and other.timer > 0 and not other._fadingStarted then
-                    if other.highlighted then
-                        other.timer = GetHighlightDuration()
-                    else
-                        other.timer = GetBaseDurationForLine(other)
-                    end
+                    other.timer = GetBaseDurationForLine()
                     other:SetAlpha(1)
                     other.slideX = 0
                     other:SetPoint("TOPLEFT", other.anchorRef or highlight, other.anchorPoint or "TOPLEFT", other.slideX, other.anchorYOffset or 0)
@@ -1223,20 +1221,20 @@ function PrettyLoot:SetupOptions()
     end
 
     local highlightStyles = {
-        background = "Background colour",
+        background   = "Background colour",
         goldbrackets = "Gold brackets",
     }
 
     -- Use LSM widget types in the options UI when AceGUI and the LSM widgets are available.
     local AceGUI = LibStub("AceGUI-3.0", true)
-    local lsm_has_font_widget = false
+    local lsm_has_font_widget  = false
     local lsm_has_sound_widget = false
     if AceGUI and AceGUI.WidgetVersions then
-        lsm_has_font_widget = AceGUI.WidgetVersions["LSM30_Font"] ~= nil
+        lsm_has_font_widget  = AceGUI.WidgetVersions["LSM30_Font"]  ~= nil
         lsm_has_sound_widget = AceGUI.WidgetVersions["LSM30_Sound"] ~= nil
     end
 
-    local fontDialogControl = lsm_has_font_widget and "LSM30_Font" or nil
+    local fontDialogControl  = lsm_has_font_widget  and "LSM30_Font"  or nil
     local soundDialogControl = lsm_has_sound_widget and "LSM30_Sound" or nil
 
     local options = {
@@ -1246,36 +1244,47 @@ function PrettyLoot:SetupOptions()
         childGroups = "tree",
         args = {
             lock = {
-                type = "toggle",
-                name = "Lock Window",
+                type  = "toggle",
+                name  = "Lock Window",
                 order = 1,
-                get = function() return self.db.profile.locked end,
-                set = function(info, value)
+                get   = function() return self.db.profile.locked end,
+                set   = function(info, value)
                     self.db.profile.locked = value
                     if value then
-                        if highlight then highlight:Hide() end
+                        if highlight       then highlight:Hide()       end
                         if highlightHeader then highlightHeader:Hide() end
-                        if highlightText then highlightText:Hide() end
+                        if highlightText   then highlightText:Hide()   end
                     else
-                        if highlight then highlight:Show() end
+                        if highlight       then highlight:Show()       end
                         if highlightHeader then highlightHeader:Show() end
-                        if highlightText then highlightText:Show() end
+                        if highlightText   then highlightText:Show()   end
                         UpdateHighlightSize()
                     end
                 end,
             },
 
             preview = {
-                type = "execute",
-                name = "Preview Loot",
+                type  = "execute",
+                name  = "Preview Loot",
                 order = 2,
-                desc = "Show a demo set of loot notifications demonstrating priority ordering.",
-                func = function()
-                    ClearPreviewLines()
+                desc  = "Show a demo set of loot notifications. Click again to dismiss.",
+                func  = function()
+                    if HasPreviewLines() then
+                        ClearPreviewLines()
+                        return
+                    end
 
                     AddOrUpdateLoot("PREVIEW_MONEY", nil, GetCoinTextureString(12345), 12345, true, false, false, true, nil)
-                    AddOrUpdateLoot("PREVIEW_REP", nil, "|cffffa500Preview Reputation|r", 50, false, false, false, true, nil)
+
+                    if self.db.profile.trackReputation then
+                        AddOrUpdateLoot("REPUTATION_Timbermaw Hold", nil, "|cff00ff88Timbermaw Hold|r", 50, false, false, false, true, nil)
+                    end
+
                     AddOrUpdateLoot("PREVIEW_ITEM", "Interface\\Icons\\INV_Misc_Herb_16", "|cffffffffPreview Item|r", 3, false, false, false, true, nil)
+
+                    if self.db.profile.trackAuctions then
+                        AddOrUpdateLoot("AUCTION_Preview Item", nil, "Preview Item", 1, false, false, false, true, nil)
+                    end
 
                     local highlightName = "|cff00ff00Highlighted Preview Item|r"
                     AddOrUpdateLoot("PREVIEW_HIGHLIGHT_ITEM", "Interface\\Icons\\INV_Misc_Rune_01", highlightName, 1, false, false, false, true, nil)
@@ -1283,170 +1292,178 @@ function PrettyLoot:SetupOptions()
             },
 
             resetPos = {
-                type = "execute",
-                name = "Reset Position",
+                type  = "execute",
+                name  = "Reset Position",
                 order = 3,
-                func = function()
+                func  = function()
                     self.db.profile.x = defaults.profile.x
                     self.db.profile.y = defaults.profile.y
                     self:ApplySavedPosition()
                 end,
             },
 
+            -- ----------------------------------------------------------------
+            -- General Settings
+            -- ----------------------------------------------------------------
             general = {
-                type = "group",
-                name = "General",
-                order = 10,
-                args = {
-                    trackingHeader = { type = "header", name = "Tracking Options", order = 1 },
+                type        = "group",
+                name        = "General Settings",
+                order       = 10,
+                args        = {
                     trackReputation = {
-                        type = "toggle",
-                        name = "Track Reputation",
-                        order = 2,
-                        get = function() return self.db.profile.trackReputation end,
-                        set = function(info, value) self.db.profile.trackReputation = value end,
+                        type  = "toggle",
+                        name  = "Enable Reputations",
+                        desc  = "Track gains and losses of reputation with factions, and add them to the display.",
+                        order = 1,
+                        width = "full",
+                        get   = function() return self.db.profile.trackReputation end,
+                        set   = function(info, value) self.db.profile.trackReputation = value end,
                     },
                     trackAuctions = {
-                        type = "toggle",
-                        name = "Track Auction Sales",
+                        type  = "toggle",
+                        name  = "Enable Auction House Sales",
+                        desc  = "Display a notification when an Auction House listing is sold.",
+                        order = 2,
+                        width = "full",
+                        get   = function() return self.db.profile.trackAuctions end,
+                        set   = function(info, value) self.db.profile.trackAuctions = value end,
+                    },
+                    stackDuplicates = {
+                        type  = "toggle",
+                        name  = "Stack duplicate items",
+                        desc  = "When enabled, looting the same item multiple times increments the count on the existing display row. When disabled, each loot event creates a new row.",
                         order = 3,
-                        get = function() return self.db.profile.trackAuctions end,
-                        set = function(info, value) self.db.profile.trackAuctions = value end,
+                        width = "full",
+                        get   = function() return self.db.profile.stackDuplicates end,
+                        set   = function(info, v) self.db.profile.stackDuplicates = v end,
                     },
-
-                    pinHeader = { type = "header", name = "Pinning / Priority", order = 4 },
-                    goldStaysOnTop = {
-                        type = "toggle",
-                        name = "Gold stays on top",
-                        desc = "Keep gold gain/loss entries visible when the list overflows.",
-                        order = 4.1,
-                        get = function() return self.db.profile.goldStaysOnTop end,
-                        set = function(info, v)
-                            self.db.profile.goldStaysOnTop = v
-                            table.sort(activeLines, function(a, b)
-                                return getPriority(a) < getPriority(b)
-                            end)
-                            RecalculateQueue()
-                        end,
-                    },
-
-                    groupFadeHeader = { type = "header", name = "Group Fade", order = 5 },
                     fadeAsGroup = {
-                        type = "toggle",
-                        name = "Fade as group",
-                        desc = "When enabled, looting a new item resets timers of currently displayed items so they eventually leave together. Departure cascades bottom-to-top.",
-                        order = 5.1,
-                        get = function() return self.db.profile.fadeAsGroup end,
-                        set = function(info, v) self.db.profile.fadeAsGroup = v end,
+                        type  = "toggle",
+                        name  = "Entries fade as group",
+                        desc  = "Receiving a new entry resets the display timer for all current entries.",
+                        order = 4,
+                        width = "full",
+                        get   = function() return self.db.profile.fadeAsGroup end,
+                        set   = function(info, v) self.db.profile.fadeAsGroup = v end,
                     },
-
-                    durationsHeader = { type = "header", name = "Duration Settings", order = 10 },
-                    durationHighlight = {
-                        type = "range",
-                        name = "Duration: Highlighted",
-                        desc = "How long highlighted items stay on screen before fading.",
-                        min = 1,
-                        max = 60,
-                        step = 1,
-                        order = 11,
-                        get = function() return self.db.profile.durationHighlight or 10 end,
-                        set = function(info, v) self.db.profile.durationHighlight = v end,
+                    fadeAsGroupDesc = {
+                        type  = "description",
+                        name  = "Receiving a new entry to the display extends the duration back to the default. Items all fade together at the end of the timer.",
+                        order = 5,
                     },
-                    globalDuration = { type = "range", name = "Global Duration (All entries)", min = 1, max = 60, step = 1, order = 12, get = function() return self.db.profile.holdDuration end, set = function(info, v) self.db.profile.holdDuration = v end },
+                    globalDuration = {
+                        type  = "range",
+                        name  = "Display Duration",
+                        desc  = "How long entries stay on screen before fading.",
+                        min   = 1,
+                        max   = 60,
+                        step  = 1,
+                        order = 6,
+                        width = "full",
+                        get   = function() return self.db.profile.holdDuration end,
+                        set   = function(info, v) self.db.profile.holdDuration = v end,
+                    },
                 },
             },
 
+            -- ----------------------------------------------------------------
+            -- Display
+            -- ----------------------------------------------------------------
             display = {
-                type = "group",
-                name = "Display",
+                type  = "group",
+                name  = "Display",
                 order = 20,
-                args = {
-                    displayHeader = { type = "header", name = "Display Settings", order = 1 },
-
-                    positionHeader = { type = "header", name = "Position", order = 2 },
+                args  = {
+                    positionHeader = { type = "header", name = "Position", order = 1 },
                     posX = {
-                        type = "range",
-                        name = "X Offset",
-                        order = 3,
+                        type  = "range",
+                        name  = "X Offset",
+                        order = 2,
                         min = -2000, max = 2000, step = 1,
-                        get = function() return self.db.profile.x or defaults.profile.x end,
-                        set = function(info, v)
+                        get   = function() return self.db.profile.x or defaults.profile.x end,
+                        set   = function(info, v)
                             self.db.profile.x = v
                             self:ApplySavedPosition()
                         end,
                     },
                     posY = {
-                        type = "range",
-                        name = "Y Offset",
-                        order = 4,
+                        type  = "range",
+                        name  = "Y Offset",
+                        order = 3,
                         min = -2000, max = 2000, step = 1,
-                        get = function() return self.db.profile.y or defaults.profile.y end,
-                        set = function(info, v)
+                        get   = function() return self.db.profile.y or defaults.profile.y end,
+                        set   = function(info, v)
                             self.db.profile.y = v
                             self:ApplySavedPosition()
                         end,
                     },
 
-                    iconSize = { type = "range", name = "Icon Size", min = 8, max = 30, step = 1, order = 5, get = function() return self.db.profile.iconSize end, set = function(info, v) self.db.profile.iconSize = v for _,line in ipairs(activeLines) do line.icon:SetSize(v, v) end UpdateHighlightSize(); RecalculateQueue() end },
-                    textSize = { type = "range", name = "Text Size", min = 8, max = 30, step = 1, order = 6, get = function() return self.db.profile.textSize end, set = function(info, v) self.db.profile.textSize = v for _,line in ipairs(activeLines) do line.text:SetFont(GetFont(), v, "OUTLINE") end PL.plusWidth = ComputePlusWidth(); for _,line in ipairs(activeLines) do if line.plus then line.plus:SetWidth(PL.plusWidth) end end UpdateHighlightSize(); RecalculateQueue() end },
-                    rowHeight = { type = "range", name = "Row Height", min = 10, max = 30, step = 1, order = 7, get = function() return self.db.profile.rowHeight end, set = function(info, v) self.db.profile.rowHeight = v for _,line in ipairs(activeLines) do line:SetHeight(v) end UpdateHighlightSize(); RecalculateQueue() end },
-                    rowSpacing = { type = "range", name = "Row Spacing", min = 0, max = 10, step = 1, order = 8, get = function() return self.db.profile.rowSpacing end, set = function(info, v) self.db.profile.rowSpacing = v UpdateHighlightSize(); RecalculateQueue() end },
-                    maxItems = { type = "range", name = "Max Items", min = 1, max = 30, step = 1, order = 9, get = function() return self.db.profile.maxItems end, set = function(info, v) self.db.profile.maxItems = v while #activeLines > v do RemoveLowestPriorityLine() end UpdateHighlightSize(); RecalculateQueue() end },
+                    displayHeader = { type = "header", name = "Appearance", order = 4 },
+                    iconSize  = { type = "range", name = "Icon Size",   min = 8,  max = 30, step = 1, order = 5,  get = function() return self.db.profile.iconSize  end, set = function(info, v) self.db.profile.iconSize = v for _,line in ipairs(activeLines) do line.icon:SetSize(v, v) end UpdateHighlightSize(); RecalculateQueue() end },
+                    textSize  = { type = "range", name = "Text Size",   min = 8,  max = 30, step = 1, order = 6,  get = function() return self.db.profile.textSize  end, set = function(info, v) self.db.profile.textSize = v for _,line in ipairs(activeLines) do line.text:SetFont(GetFont(), v, "OUTLINE") end PL.plusWidth = ComputePlusWidth(); for _,line in ipairs(activeLines) do if line.plus then line.plus:SetWidth(PL.plusWidth) end end UpdateHighlightSize(); RecalculateQueue() end },
+                    rowHeight = { type = "range", name = "Row Height",  min = 10, max = 30, step = 1, order = 7,  get = function() return self.db.profile.rowHeight end, set = function(info, v) self.db.profile.rowHeight = v for _,line in ipairs(activeLines) do line:SetHeight(v) end UpdateHighlightSize(); RecalculateQueue() end },
+                    rowSpacing= { type = "range", name = "Row Spacing", min = 0,  max = 10, step = 1, order = 8,  get = function() return self.db.profile.rowSpacing end, set = function(info, v) self.db.profile.rowSpacing = v UpdateHighlightSize(); RecalculateQueue() end },
+                    maxItems  = { type = "range", name = "Max Items",   min = 1,  max = 30, step = 1, order = 9,  get = function() return self.db.profile.maxItems  end, set = function(info, v) self.db.profile.maxItems = v while #activeLines > v do RemoveLowestPriorityLine() end UpdateHighlightSize(); RecalculateQueue() end },
                     font = {
-                        type = "select",
+                        type          = "select",
                         dialogControl = fontDialogControl,
-                        name = "Font",
-                        values = function()
-                            return SafeLSMHashTable("font")
-                        end,
-                        order = 10,
-                        get = function() return self.db.profile.fontKey end,
-                        set = function(info, key) self.db.profile.fontKey = key for _,line in ipairs(activeLines) do line.text:SetFont(GetFont(), self.db.profile.textSize, "OUTLINE") end PL.plusWidth = ComputePlusWidth(); for _,line in ipairs(activeLines) do if line.plus then line.plus:SetWidth(PL.plusWidth) end end RecalculateQueue() end },
+                        name          = "Font",
+                        values        = function() return SafeLSMHashTable("font") end,
+                        order         = 10,
+                        get           = function() return self.db.profile.fontKey end,
+                        set           = function(info, key) self.db.profile.fontKey = key for _,line in ipairs(activeLines) do line.text:SetFont(GetFont(), self.db.profile.textSize, "OUTLINE") end PL.plusWidth = ComputePlusWidth(); for _,line in ipairs(activeLines) do if line.plus then line.plus:SetWidth(PL.plusWidth) end end RecalculateQueue() end,
+                    },
                 },
             },
 
+            -- ----------------------------------------------------------------
+            -- Blacklist / Highlight
+            -- ----------------------------------------------------------------
             lists = {
-                type = "group",
-                name = "Blacklist / Highlight",
+                type  = "group",
+                name  = "Blacklist / Highlight",
                 order = 30,
-                args = {
-                    soundHeader = { type = "header", name = "Sound Settings", order = 1 },
+                args  = {
+                    soundHeader         = { type = "header", name = "Sound Settings", order = 1 },
                     playSoundOnHighlight = { type = "toggle", name = "Play sound on highlight", order = 2, get = function() return self.db.profile.playSoundOnHighlight end, set = function(info, v) self.db.profile.playSoundOnHighlight = v end },
-                    highlightSound = { type = "select", dialogControl = soundDialogControl, name = "Highlight sound", order = 3, values = function() return SafeLSMHashTable("sound") end, get = function() return self.db.profile.highlightSound end, set = function(info, key) self.db.profile.highlightSound = key end },
+                    highlightSound      = { type = "select", dialogControl = soundDialogControl, name = "Highlight sound", order = 3, values = function() return SafeLSMHashTable("sound") end, get = function() return self.db.profile.highlightSound end, set = function(info, key) self.db.profile.highlightSound = key end },
 
-                    visualHeader = { type = "header", name = "Highlight Visuals", order = 5 },
-                    highlightStyle = { type = "select", name = "Highlight style", order = 6, values = highlightStyles, get = function() return self.db.profile.highlightStyle or "goldbrackets" end, set = function(info, v) self.db.profile.highlightStyle = v end },
+                    visualHeader            = { type = "header", name = "Highlight Visuals", order = 5 },
+                    highlightStyle          = { type = "select", name = "Highlight style", order = 6, values = highlightStyles, get = function() return self.db.profile.highlightStyle or "goldbrackets" end, set = function(info, v) self.db.profile.highlightStyle = v end },
                     highlightBackgroundColour = { type = "color", name = "Highlight background colour", order = 7, hasAlpha = true, hidden = function() return (self.db.profile.highlightStyle or "goldbrackets") ~= "background" end, get = function() local c = self.db.profile.highlightBackgroundColour or { r = 0.4, g = 0.2, b = 0.7, a = 0.25 } return c.r or 0.4, c.g or 0.2, c.b or 0.7, c.a or 0.25 end, set = function(info, r, g, b, a) self.db.profile.highlightBackgroundColour = { r = r, g = g, b = b, a = a } end },
 
                     previewHighlight = { type = "execute", name = "Preview highlighted item", order = 8, desc = "Show a single highlighted item using the current highlight settings.", func = function() ClearPreviewLines(); local highlightName = "|cff00ff00Highlighted Preview Item|r"; AddOrUpdateLoot("PREVIEW_HIGHLIGHT_ITEM", "Interface\\Icons\\INV_Misc_Rune_01", highlightName, 1, false, false, false, true, nil) end },
 
-                    listsHeader = { type = "header", name = "Lists", order = 10 },
-                    blacklistDesc = { type = "description", name = "Blacklisted Items: these entries are ignored. Enter exact names or use '*' wildcards (case-insensitive). You can also enter numeric IDs or prefixes like CURRENCY:123.", order = 11 },
-                    blacklist = { type = "input", multiline = true, width = "full", name = "Blacklisted Items", desc = "Comma or newline separated. Example: Silk Cloth, Silk*, 12345, CURRENCY:789", order = 12, get = function() return self.db.profile.blacklist end, set = function(info, v) self.db.profile.blacklist = v UpdateParsedLists() end },
+                    listsHeader   = { type = "header",      name = "Lists", order = 10 },
+                    blacklistDesc = { type = "description", name = "Blacklisted items are never shown. Enter exact names or use '*' wildcards (case-insensitive). You can also enter numeric IDs or prefixes like CURRENCY:123.", order = 11 },
+                    blacklist     = { type = "input", multiline = true, width = "full", name = "Blacklisted Items", desc = "Comma or newline separated. Example: Silk Cloth, Silk*, 12345, CURRENCY:789", order = 12, get = function() return self.db.profile.blacklist end, set = function(info, v) self.db.profile.blacklist = v UpdateParsedLists() end },
 
-                    highlightDesc = { type = "description", name = "Highlighted Items: entries here extend display time and optionally play sound. Use exact names or '*' wildcards (case-insensitive).", order = 20 },
-                    highlight = { type = "input", multiline = true, width = "full", name = "Highlighted Items", desc = "Comma or newline separated. Example: Opulent Bracers, *cloth, REPUTATION:123", order = 21, get = function() return self.db.profile.highlight end, set = function(info, v) self.db.profile.highlight = v UpdateParsedLists() end },
+                    highlightDesc = { type = "description", name = "Highlighted items are shown with a visual indicator and optionally play a sound. Use exact names or '*' wildcards (case-insensitive).", order = 20 },
+                    highlight     = { type = "input", multiline = true, width = "full", name = "Highlighted Items", desc = "Comma or newline separated. Example: Opulent Bracers, *cloth, REPUTATION:123", order = 21, get = function() return self.db.profile.highlight end, set = function(info, v) self.db.profile.highlight = v UpdateParsedLists() end },
                 },
             },
 
+            -- ----------------------------------------------------------------
+            -- Profiles
+            -- ----------------------------------------------------------------
             profiles = {
-                type = "group",
-                name = "Profiles",
+                type  = "group",
+                name  = "Profiles",
                 order = 40,
-                args = {
+                args  = {
                     profileHeader = { type = "header", name = "Profile Management", order = 1 },
                     profileSelect = {
-                        type = "select",
-                        name = "Active Profile",
-                        desc = "Switch profiles",
-                        order = 2,
+                        type   = "select",
+                        name   = "Active Profile",
+                        desc   = "Switch profiles",
+                        order  = 2,
                         values = function() return GetProfileList() end,
-                        get = function() return self.db:GetCurrentProfile() end,
-                        set = function(info, name)
+                        get    = function() return self.db:GetCurrentProfile() end,
+                        set    = function(info, name)
                             self.db.profile.locked = true
-                            if highlight then highlight:Hide() end
+                            if highlight       then highlight:Hide()       end
                             if highlightHeader then highlightHeader:Hide() end
-                            if highlightText then highlightText:Hide() end
+                            if highlightText   then highlightText:Hide()   end
 
                             self.db:SetProfile(name)
                             UpdateParsedLists()
@@ -1456,19 +1473,15 @@ function PrettyLoot:SetupOptions()
                         end,
                     },
 
-                    copyFromHeader = {
-                        type = "header",
-                        name = "Copy From",
-                        order = 5,
-                    },
+                    copyFromHeader = { type = "header", name = "Copy From", order = 5 },
                     copyFrom = {
-                        type = "select",
-                        name = "Copy settings from...",
-                        desc = "Copy settings from another profile into the current profile.",
-                        order = 6,
+                        type   = "select",
+                        name   = "Copy settings from...",
+                        desc   = "Copy settings from another profile into the current profile.",
+                        order  = 6,
                         values = function() return GetProfileList() end,
-                        get = function() return "" end,
-                        set = function(info, sourceName)
+                        get    = function() return "" end,
+                        set    = function(info, sourceName)
                             local db = PrettyLoot.db
                             local currentName = db:GetCurrentProfile()
                             if sourceName == currentName then
@@ -1492,21 +1505,21 @@ function PrettyLoot:SetupOptions()
                     },
 
                     newProfileName = {
-                        type = "input",
-                        name = "New profile name",
-                        desc = "Enter a name for a new profile.",
+                        type  = "input",
+                        name  = "New profile name",
+                        desc  = "Enter a name for a new profile.",
                         order = 10,
                         width = "full",
-                        get = function() return PL._newProfileName or "" end,
-                        set = function(info, val) PL._newProfileName = Trim(val) end,
+                        get   = function() return PL._newProfileName or "" end,
+                        set   = function(info, val) PL._newProfileName = Trim(val) end,
                     },
 
                     createProfile = {
-                        type = "execute",
-                        name = "Create profile",
-                        desc = "Create a new profile from addon defaults.",
+                        type  = "execute",
+                        name  = "Create profile",
+                        desc  = "Create a new profile from addon defaults.",
                         order = 11,
-                        func = function()
+                        func  = function()
                             local name = PL._newProfileName
                             if not name or name == "" then
                                 DEFAULT_CHAT_FRAME:AddMessage("PrettyLoot: enter a name in the 'New profile name' box first")
@@ -1518,11 +1531,11 @@ function PrettyLoot:SetupOptions()
                     },
 
                     deleteProfile = {
-                        type = "execute",
-                        name = "Delete current profile",
-                        desc = "Delete the current profile (you will be switched back to Default).",
+                        type  = "execute",
+                        name  = "Delete current profile",
+                        desc  = "Delete the current profile (you will be switched back to Default).",
                         order = 20,
-                        func = function()
+                        func  = function()
                             local sel = PrettyLoot.db:GetCurrentProfile()
                             if not sel then
                                 DEFAULT_CHAT_FRAME:AddMessage("PrettyLoot: no active profile to delete")
@@ -1548,19 +1561,19 @@ function PrettyLoot:SetupOptions()
                     },
 
                     exportProfile = {
-                        type = "execute",
-                        name = "Export Profile",
-                        desc = "Export the current profile and open a copyable dialog.",
+                        type  = "execute",
+                        name  = "Export Profile",
+                        desc  = "Export the current profile and open a copyable dialog.",
                         order = 30,
-                        func = function() OpenExportDialog() end,
+                        func  = function() OpenExportDialog() end,
                     },
 
                     importProfile = {
-                        type = "execute",
-                        name = "Import Profile",
-                        desc = "Open the Import dialog to paste profile data.",
+                        type  = "execute",
+                        name  = "Import Profile",
+                        desc  = "Open the Import dialog to paste profile data.",
                         order = 31,
-                        func = function() OpenImportDialog() end,
+                        func  = function() OpenImportDialog() end,
                     },
                 },
             },
@@ -1603,9 +1616,6 @@ function PrettyLoot:CHAT_MSG_LOOT(event, message)
     local playerName = UnitName("player")
 
     -- Only process canonical loot receipt messages for the player.
-    -- This avoids:
-    --   * other players winning rolls showing in the display
-    --   * duplicate x2 loot entries from secondary loot events
     local isPlayerLoot =
         message:find("^You receive loot:")
 		or message:find("^You create:")
@@ -1849,8 +1859,6 @@ function PrettyLoot:OnInitialize()
     UpdateParsedLists()
 
     self:RegisterChatCommand("pl", "SlashCommand")
-
-    DEFAULT_CHAT_FRAME:AddMessage("|cff00ff00PrettyLoot Loaded|r - Type /pl for options")
 end
 
 function PrettyLoot:OnEnable()
@@ -1860,6 +1868,8 @@ function PrettyLoot:OnEnable()
     self:RegisterEvent("PLAYER_ENTERING_WORLD")
     self:RegisterEvent("CHAT_MSG_COMBAT_FACTION_CHANGE")
     self.savedOldMoney = GetMoney()
+
+    DEFAULT_CHAT_FRAME:AddMessage("|cff00ff00PrettyLoot v" .. PRETTYLOOT_VERSION .. " loaded|r — type /pl for options")
 
     -- Delay media registration slightly to ensure LSM is fully initialised.
     C_Timer.After(0.2, function() PrettyLoot:RegisterMedia() end)
@@ -1886,7 +1896,11 @@ function PrettyLoot:SlashCommand(msg)
         end
     else
         if AceConfigDialog then
-            AceConfigDialog:Open("PrettyLoot")
+            if AceConfigDialog.OpenFrames and AceConfigDialog.OpenFrames["PrettyLoot"] then
+                AceConfigDialog:Close("PrettyLoot")
+            else
+                AceConfigDialog:Open("PrettyLoot")
+            end
         else
             DEFAULT_CHAT_FRAME:AddMessage("PrettyLoot: options UI not available (AceConfigDialog missing)")
         end
