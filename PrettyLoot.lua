@@ -52,7 +52,12 @@ local defaults = {
         holdDuration = 10,
 
         trackReputation = true,
+        trackHonour = false,
         trackAuctions = false,
+
+        prefixColorRep = { r = 1, g = 0.647, b = 0, a = 1 },
+        prefixColorAH  = { r = 1, g = 0.647, b = 0, a = 1 },
+        prefixColorPVP = { r = 1, g = 0.647, b = 0, a = 1 },
 
         blacklist = "",
         highlight = "",
@@ -232,12 +237,13 @@ local function IsHighlighted(itemKey, displayName)
 end
 
 -- =========================================================================
--- Priority: gold always stays on top, followed by auctions, reputation, items
+-- Priority: gold always stays on top, followed by auctions, reputation/honour, items
 -- =========================================================================
 local function getPriority(line)
     if line.isMoney      then return 0 end
     if line.isAuction    then return 2 end
     if line.isReputation then return 3 end
+    if line.isHonour     then return 3 end
     return 4
 end
 
@@ -337,6 +343,13 @@ end
 -- Helpers for gold bracket formatting
 -- =========================================================================
 local GOLD_BRACKET_COLOR = "|cffffd700"
+local function PrefixColor(c)
+    return string.format("|cff%02x%02x%02x", (c.r or 1) * 255, (c.g or 0.647) * 255, (c.b or 0) * 255)
+end
+
+local function RepPrefixText()    return PrefixColor(PL.db.profile.prefixColorRep) .. "REP|r" end
+local function AHPrefixText()     return PrefixColor(PL.db.profile.prefixColorAH)  .. "AH|r"  end
+local function PVPPrefixText()    return PrefixColor(PL.db.profile.prefixColorPVP) .. "PVP|r" end
 local function WrapWithGoldBrackets(name)
     -- Put gold brackets around the name while leaving the name's own color escape sequences intact.
     -- We reset color before the name so the name's own color codes show correctly.
@@ -350,7 +363,7 @@ local function ComputePlusWidth()
     if not anchor then return 36 end
     local temp = anchor:CreateFontString(nil, "OVERLAY")
     temp:SetFont(GetFont(), PL.db.profile.textSize, "OUTLINE")
-    local samples = { "|cff00ff00+|r", "|cffff0000-|r", "|cffffa500REP|r", "|cffff8800AH|r" }
+    local samples = { "|cff00ff00+|r", "|cffff0000-|r", RepPrefixText(), AHPrefixText(), PVPPrefixText() }
     local maxW = 0
     for _, s in ipairs(samples) do
         temp:SetText(s)
@@ -446,7 +459,8 @@ local function GetLine()
         line:SetClipsChildren(false)
         line.slideX = 0
 
-        line.plus = line:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
+        line.plus = line:CreateFontString(nil, "OVERLAY")
+        line.plus:SetFont(GetFont(), PL.db.profile.textSize, "OUTLINE")
         line.plus:SetPoint("LEFT", line, "LEFT", 0, PL.db.profile.indicatorVerticalOffset or 0)
         line.plus:SetText("|cff00ff00+|r")
         line.plus:SetParent(line)
@@ -567,7 +581,7 @@ end
 -- =========================================================================
 -- Add/Update loot entries
 -- =========================================================================
-local function AddOrUpdateLoot(key, iconPath, textHtml, quantity, isMoney, isCurrency, isLoss, isPreview, itemLink)
+local function AddOrUpdateLoot(key, iconPath, textHtml, quantity, isMoney, isLoss, isPreview, itemLink)
     local displayName = StripColors(textHtml)
     if not isPreview and IsBlacklisted(key, displayName) then return end
 
@@ -578,8 +592,7 @@ local function AddOrUpdateLoot(key, iconPath, textHtml, quantity, isMoney, isCur
     -- loot event for the same item creates a fresh line below the existing one.
     local allowStack = isPreview
         or isMoney
-        or isCurrency
-        or (type(key) == "string" and (key:match("^REPUTATION_") or key:match("^AUCTION_")))
+        or (type(key) == "string" and (key:match("^REPUTATION_") or key:match("^AUCTION_") or key:match("^HONOUR_")))
         or PL.db.profile.stackDuplicates
 
     local line
@@ -603,8 +616,8 @@ local function AddOrUpdateLoot(key, iconPath, textHtml, quantity, isMoney, isCur
             line.highlighted = true
         end
 
-        -- Money, currency, and reputation are signed; losses subtract from the running total.
-        if isCurrency or line.isCurrency or line.isReputation or isMoney or line.isMoney then
+        -- Money and reputation are signed; losses subtract from the running total.
+        if line.isReputation or isMoney or line.isMoney then
             local signedQuantity = isLoss and -quantity or quantity
             line.currentCount = (line.currentCount or 0) + signedQuantity
         else
@@ -626,18 +639,26 @@ local function AddOrUpdateLoot(key, iconPath, textHtml, quantity, isMoney, isCur
             line.text:ClearAllPoints()
             line.text:SetPoint("LEFT", line.plus, "RIGHT", PL.db.profile.iconGapNoIcon or 2, 0)
             AnchorTextHighlight(line)
-        elseif line.isReputation or isCurrency then
+        elseif line.isHonour then
+            line.isMoney = nil
+            local baseName = line.baseName or textHtml
+            line.plus:SetText(PVPPrefixText())
+            if applyGoldBrackets then
+                finalText = string.format("%s |cffffffff+%d|r", WrapWithGoldBrackets(baseName), line.currentCount or 0)
+            else
+                finalText = string.format("%s |cffffffff+%d|r", baseName, line.currentCount or 0)
+            end
+            line.text:ClearAllPoints()
+            line.text:SetPoint("LEFT", line.plus, "RIGHT", PL.db.profile.iconGapNoIcon or 2, 0)
+            AnchorTextHighlight(line)
+        elseif line.isReputation then
             line.isMoney = nil
             if line.currentCount == 0 then RemoveLine(line); return end
             local displayQuantity = math.abs(line.currentCount)
             local sign = line.currentCount >= 0 and "+" or "-"
             local baseName = line.baseName or textHtml
 
-            if line.isReputation then
-                line.plus:SetText("|cffffa500REP|r")
-            else
-                line.plus:SetText("|cff89cff0CUR|r")
-            end
+            line.plus:SetText(RepPrefixText())
 
             if applyGoldBrackets then
                 finalText = string.format("%s |cffffffff%s%d|r", WrapWithGoldBrackets(baseName), sign, displayQuantity)
@@ -645,13 +666,8 @@ local function AddOrUpdateLoot(key, iconPath, textHtml, quantity, isMoney, isCur
                 finalText = string.format("%s |cffffffff%s%d|r", baseName, sign, displayQuantity)
             end
 
-            -- Reputation hides the icon; currency shows it. Anchor text accordingly.
             line.text:ClearAllPoints()
-            if line.isReputation then
-                line.text:SetPoint("LEFT", line.plus, "RIGHT", PL.db.profile.iconGapNoIcon or 2, 0)
-            else
-                line.text:SetPoint("LEFT", line.icon, "RIGHT", 8, 0)
-            end
+            line.text:SetPoint("LEFT", line.plus, "RIGHT", PL.db.profile.iconGapNoIcon or 2, 0)
             AnchorTextHighlight(line)
         elseif line.isAuction then
             line.isMoney = nil
@@ -662,7 +678,7 @@ local function AddOrUpdateLoot(key, iconPath, textHtml, quantity, isMoney, isCur
             else
                 finalText = baseName .. " sold!"
             end
-            line.plus:SetText("|cffff8800AH|r")
+            line.plus:SetText(AHPrefixText())
             line.text:ClearAllPoints()
             line.text:SetPoint("LEFT", line.plus, "RIGHT", PL.db.profile.iconGapNoIcon or 2, 0)
             AnchorTextHighlight(line)
@@ -704,12 +720,11 @@ local function AddOrUpdateLoot(key, iconPath, textHtml, quantity, isMoney, isCur
         line.itemLink = itemLink
         line.isPreview = isPreview and true or nil
         line.isReputation = type(key) == "string" and key:match("^REPUTATION_") ~= nil
-        line.isAuction = type(key) == "string" and key:match("^AUCTION_") ~= nil
-        if isCurrency then
+        line.isHonour     = type(key) == "string" and key:match("^HONOUR_")     ~= nil
+        line.isAuction    = type(key) == "string" and key:match("^AUCTION_")    ~= nil
+        if isMoney then
             line.currentCount = isLoss and -quantity or quantity
-        elseif isMoney then
-            line.currentCount = isLoss and -quantity or quantity
-        elseif line.isReputation then
+        elseif line.isReputation or line.isHonour then
             line.currentCount = isLoss and -quantity or quantity
         else
             -- Items and auctions: plain quantity, no sign
@@ -739,7 +754,7 @@ local function AddOrUpdateLoot(key, iconPath, textHtml, quantity, isMoney, isCur
             line.text:SetFont(GetFont(), PL.db.profile.textSize, "OUTLINE")
             local displayQuantity = math.abs(line.currentCount)
             local sign = line.currentCount >= 0 and "+" or "-"
-            line.plus:SetText("|cffffa500REP|r")
+            line.plus:SetText(RepPrefixText())
             if applyGoldBrackets then
                 finalText = string.format("%s |cffffffff%s%d|r", WrapWithGoldBrackets(textHtml), sign, displayQuantity)
             else
@@ -747,22 +762,18 @@ local function AddOrUpdateLoot(key, iconPath, textHtml, quantity, isMoney, isCur
             end
             line.text:SetText(finalText)
             AnchorTextHighlight(line)
-        elseif isCurrency then
-            line.icon:Show()
-            line.iconBorder:Show()
-            line.icon:SetTexture(iconPath or DEFAULT_ICON)
-            line.icon:SetPoint("LEFT", line.plus, "RIGHT", PL.db.profile.iconGapWithIcon or 6, PL.db.profile.indicatorVerticalOffset or 0)
+        elseif line.isHonour then
+            line.icon:Hide()
+            line.iconBorder:Hide()
             line.text:ClearAllPoints()
-            line.text:SetPoint("LEFT", line.icon, "RIGHT", 8, 0)
+            line.text:SetPoint("LEFT", line.plus, "RIGHT", PL.db.profile.iconGapNoIcon or 2, PL.db.profile.indicatorVerticalOffset or 0)
             line.text:SetFont(GetFont(), PL.db.profile.textSize, "OUTLINE")
-            local displayQuantity = math.abs(line.currentCount)
-            local sign = line.currentCount >= 0 and "+" or "-"
+            line.plus:SetText(PVPPrefixText())
             if applyGoldBrackets then
-                finalText = string.format("%s |cffffffff%s%d|r", WrapWithGoldBrackets(textHtml), sign, displayQuantity)
+                finalText = string.format("%s |cffffffff+%d|r", WrapWithGoldBrackets(textHtml), line.currentCount or 0)
             else
-                finalText = string.format("%s |cffffffff%s%d|r", textHtml, sign, displayQuantity)
+                finalText = string.format("%s |cffffffff+%d|r", textHtml, line.currentCount or 0)
             end
-            line.plus:SetText("|cff89cff0CUR|r")
             line.text:SetText(finalText)
             AnchorTextHighlight(line)
         elseif line.isAuction then
@@ -777,7 +788,7 @@ local function AddOrUpdateLoot(key, iconPath, textHtml, quantity, isMoney, isCur
             else
                 finalText = textHtml .. " sold!"
             end
-            line.plus:SetText("|cffff8800AH|r")
+            line.plus:SetText(AHPrefixText())
             line.text:SetText(finalText)
             AnchorTextHighlight(line)
         else
@@ -860,8 +871,8 @@ local function FlushEventQueue()
                 signed       = ev.signed or 0,
                 qty          = ev.qty or 0,
                 isMoney      = ev.isMoney,
-                isCurrency   = ev.isCurrency,
                 isReputation = ev.isReputation,
+                isHonour     = ev.isHonour,
                 isAuction    = ev.isAuction,
                 itemLink     = ev.itemLink,
             }
@@ -877,20 +888,24 @@ local function FlushEventQueue()
         if m.isMoney then
             if (m.signed or 0) ~= 0 then
                 local isLoss = (m.signed or 0) < 0
-                AddOrUpdateLoot("MONEY", nil, GetCoinTextureString(math.abs(m.signed)), math.abs(m.signed), true, false, isLoss, false, nil)
+                AddOrUpdateLoot("MONEY", nil, GetCoinTextureString(math.abs(m.signed)), math.abs(m.signed), true, isLoss, false, nil)
             end
-        elseif m.isCurrency or m.isReputation then
+        elseif m.isReputation then
             local signed = m.signed or 0
             if signed == 0 then
                 if (m.qty or 0) > 0 then
-                    AddOrUpdateLoot(m.key, m.icon, m.text, m.qty, false, m.isCurrency, false, false, m.itemLink)
+                    AddOrUpdateLoot(m.key, m.icon, m.text, m.qty, false, false, false, m.itemLink)
                 end
             else
-                AddOrUpdateLoot(m.key, m.icon, m.text, math.abs(signed), false, m.isCurrency, signed < 0, false, m.itemLink)
+                AddOrUpdateLoot(m.key, m.icon, m.text, math.abs(signed), false, signed < 0, false, m.itemLink)
+            end
+        elseif m.isHonour then
+            if (m.qty or 0) > 0 then
+                AddOrUpdateLoot(m.key, m.icon, m.text, m.qty, false, false, false, m.itemLink)
             end
         else
             if (m.qty or 0) > 0 then
-                AddOrUpdateLoot(m.key, m.icon, m.text, m.qty, false, false, false, false, m.itemLink)
+                AddOrUpdateLoot(m.key, m.icon, m.text, m.qty, false, false, false, m.itemLink)
             end
         end
     end
@@ -1274,20 +1289,24 @@ function PrettyLoot:SetupOptions()
                         return
                     end
 
-                    AddOrUpdateLoot("PREVIEW_MONEY", nil, GetCoinTextureString(12345), 12345, true, false, false, true, nil)
+                    AddOrUpdateLoot("PREVIEW_MONEY", nil, GetCoinTextureString(12345), 12345, true, false, true, nil)
 
                     if self.db.profile.trackReputation then
-                        AddOrUpdateLoot("REPUTATION_Timbermaw Hold", nil, "|cff00ff88Timbermaw Hold|r", 50, false, false, false, true, nil)
+                        AddOrUpdateLoot("REPUTATION_Timbermaw Hold", nil, "|cff00ff88Timbermaw Hold|r", 50, false, false, true, nil)
                     end
 
-                    AddOrUpdateLoot("PREVIEW_ITEM", "Interface\\Icons\\INV_Misc_Herb_16", "|cffffffffPreview Item|r", 3, false, false, false, true, nil)
+                    if self.db.profile.trackHonour then
+                        AddOrUpdateLoot("HONOUR_SESSION", nil, "|cffffd700Honour|r", 198, false, false, true, nil)
+                    end
+
+                    AddOrUpdateLoot("PREVIEW_ITEM", "Interface\\Icons\\INV_Misc_Herb_16", "|cffffffffPreview Item|r", 3, false, false, true, nil)
 
                     if self.db.profile.trackAuctions then
-                        AddOrUpdateLoot("AUCTION_Preview Item", nil, "Preview Item", 1, false, false, false, true, nil)
+                        AddOrUpdateLoot("AUCTION_Preview Item", nil, "Preview Item", 1, false, false, true, nil)
                     end
 
                     local highlightName = "|cff00ff00Highlighted Preview Item|r"
-                    AddOrUpdateLoot("PREVIEW_HIGHLIGHT_ITEM", "Interface\\Icons\\INV_Misc_Rune_01", highlightName, 1, false, false, false, true, nil)
+                    AddOrUpdateLoot("PREVIEW_HIGHLIGHT_ITEM", "Interface\\Icons\\INV_Misc_Rune_01", highlightName, 1, false, false, true, nil)
                 end,
             },
 
@@ -1319,11 +1338,20 @@ function PrettyLoot:SetupOptions()
                         get   = function() return self.db.profile.trackReputation end,
                         set   = function(info, value) self.db.profile.trackReputation = value end,
                     },
+                    trackHonour = {
+                        type  = "toggle",
+                        name  = "Enable Honour",
+                        desc  = "Track honour points earned in combat and display them.",
+                        order = 2,
+                        width = "full",
+                        get   = function() return self.db.profile.trackHonour end,
+                        set   = function(info, value) self.db.profile.trackHonour = value end,
+                    },
                     trackAuctions = {
                         type  = "toggle",
                         name  = "Enable Auction House Sales",
                         desc  = "Display a notification when an Auction House listing is sold.",
-                        order = 2,
+                        order = 3,
                         width = "full",
                         get   = function() return self.db.profile.trackAuctions end,
                         set   = function(info, value) self.db.profile.trackAuctions = value end,
@@ -1332,7 +1360,7 @@ function PrettyLoot:SetupOptions()
                         type  = "toggle",
                         name  = "Stack duplicate items",
                         desc  = "When enabled, looting the same item multiple times increments the count on the existing display row. When disabled, each loot event creates a new row.",
-                        order = 3,
+                        order = 4,
                         width = "full",
                         get   = function() return self.db.profile.stackDuplicates end,
                         set   = function(info, v) self.db.profile.stackDuplicates = v end,
@@ -1341,7 +1369,7 @@ function PrettyLoot:SetupOptions()
                         type  = "toggle",
                         name  = "Entries fade as group",
                         desc  = "Receiving a new entry resets the display timer for all current entries.",
-                        order = 4,
+                        order = 5,
                         width = "full",
                         get   = function() return self.db.profile.fadeAsGroup end,
                         set   = function(info, v) self.db.profile.fadeAsGroup = v end,
@@ -1349,7 +1377,7 @@ function PrettyLoot:SetupOptions()
                     fadeAsGroupDesc = {
                         type  = "description",
                         name  = "Receiving a new entry to the display extends the duration back to the default. Items all fade together at the end of the timer.",
-                        order = 5,
+                        order = 6,
                     },
                     globalDuration = {
                         type  = "range",
@@ -1358,10 +1386,60 @@ function PrettyLoot:SetupOptions()
                         min   = 1,
                         max   = 60,
                         step  = 1,
-                        order = 6,
+                        order = 7,
                         width = "full",
                         get   = function() return self.db.profile.holdDuration end,
                         set   = function(info, v) self.db.profile.holdDuration = v end,
+                    },
+
+                    prefixColourHeader = { type = "header", name = "Prefix Colours", order = 20 },
+                    prefixColorRep = {
+                        type     = "color",
+                        name     = "Reputation (REP)",
+                        order    = 21,
+                        hasAlpha = false,
+                        get      = function()
+                            local c = self.db.profile.prefixColorRep
+                            return c.r, c.g, c.b
+                        end,
+                        set      = function(info, r, g, b)
+                            self.db.profile.prefixColorRep = { r = r, g = g, b = b, a = 1 }
+                            for _, line in ipairs(activeLines) do
+                                if line.isReputation then line.plus:SetText(RepPrefixText()) end
+                            end
+                        end,
+                    },
+                    prefixColorAH = {
+                        type     = "color",
+                        name     = "Auction House (AH)",
+                        order    = 22,
+                        hasAlpha = false,
+                        get      = function()
+                            local c = self.db.profile.prefixColorAH
+                            return c.r, c.g, c.b
+                        end,
+                        set      = function(info, r, g, b)
+                            self.db.profile.prefixColorAH = { r = r, g = g, b = b, a = 1 }
+                            for _, line in ipairs(activeLines) do
+                                if line.isAuction then line.plus:SetText(AHPrefixText()) end
+                            end
+                        end,
+                    },
+                    prefixColorPVP = {
+                        type     = "color",
+                        name     = "PVP Honour (PVP)",
+                        order    = 23,
+                        hasAlpha = false,
+                        get      = function()
+                            local c = self.db.profile.prefixColorPVP
+                            return c.r, c.g, c.b
+                        end,
+                        set      = function(info, r, g, b)
+                            self.db.profile.prefixColorPVP = { r = r, g = g, b = b, a = 1 }
+                            for _, line in ipairs(activeLines) do
+                                if line.isHonour then line.plus:SetText(PVPPrefixText()) end
+                            end
+                        end,
                     },
                 },
             },
@@ -1400,7 +1478,7 @@ function PrettyLoot:SetupOptions()
 
                     displayHeader = { type = "header", name = "Appearance", order = 4 },
                     iconSize  = { type = "range", name = "Icon Size",   min = 8,  max = 30, step = 1, order = 5,  get = function() return self.db.profile.iconSize  end, set = function(info, v) self.db.profile.iconSize = v for _,line in ipairs(activeLines) do line.icon:SetSize(v, v) end UpdateHighlightSize(); RecalculateQueue() end },
-                    textSize  = { type = "range", name = "Text Size",   min = 8,  max = 30, step = 1, order = 6,  get = function() return self.db.profile.textSize  end, set = function(info, v) self.db.profile.textSize = v for _,line in ipairs(activeLines) do line.text:SetFont(GetFont(), v, "OUTLINE") end PL.plusWidth = ComputePlusWidth(); for _,line in ipairs(activeLines) do if line.plus then line.plus:SetWidth(PL.plusWidth) end end UpdateHighlightSize(); RecalculateQueue() end },
+                    textSize  = { type = "range", name = "Text Size",   min = 8,  max = 30, step = 1, order = 6,  get = function() return self.db.profile.textSize  end, set = function(info, v) self.db.profile.textSize = v for _,line in ipairs(activeLines) do line.text:SetFont(GetFont(), v, "OUTLINE") if line.plus then line.plus:SetFont(GetFont(), v, "OUTLINE") end end PL.plusWidth = ComputePlusWidth(); for _,line in ipairs(activeLines) do if line.plus then line.plus:SetWidth(PL.plusWidth) end end UpdateHighlightSize(); RecalculateQueue() end },
                     rowHeight = { type = "range", name = "Row Height",  min = 10, max = 30, step = 1, order = 7,  get = function() return self.db.profile.rowHeight end, set = function(info, v) self.db.profile.rowHeight = v for _,line in ipairs(activeLines) do line:SetHeight(v) end UpdateHighlightSize(); RecalculateQueue() end },
                     rowSpacing= { type = "range", name = "Row Spacing", min = 0,  max = 10, step = 1, order = 8,  get = function() return self.db.profile.rowSpacing end, set = function(info, v) self.db.profile.rowSpacing = v UpdateHighlightSize(); RecalculateQueue() end },
                     maxItems  = { type = "range", name = "Max Items",   min = 1,  max = 30, step = 1, order = 9,  get = function() return self.db.profile.maxItems  end, set = function(info, v) self.db.profile.maxItems = v while #activeLines > v do RemoveLowestPriorityLine() end UpdateHighlightSize(); RecalculateQueue() end },
@@ -1411,7 +1489,7 @@ function PrettyLoot:SetupOptions()
                         values        = function() return SafeLSMHashTable("font") end,
                         order         = 10,
                         get           = function() return self.db.profile.fontKey end,
-                        set           = function(info, key) self.db.profile.fontKey = key for _,line in ipairs(activeLines) do line.text:SetFont(GetFont(), self.db.profile.textSize, "OUTLINE") end PL.plusWidth = ComputePlusWidth(); for _,line in ipairs(activeLines) do if line.plus then line.plus:SetWidth(PL.plusWidth) end end RecalculateQueue() end,
+                        set           = function(info, key) self.db.profile.fontKey = key for _,line in ipairs(activeLines) do line.text:SetFont(GetFont(), self.db.profile.textSize, "OUTLINE") if line.plus then line.plus:SetFont(GetFont(), self.db.profile.textSize, "OUTLINE") end end PL.plusWidth = ComputePlusWidth(); for _,line in ipairs(activeLines) do if line.plus then line.plus:SetWidth(PL.plusWidth) end end RecalculateQueue() end,
                     },
                 },
             },
@@ -1432,11 +1510,11 @@ function PrettyLoot:SetupOptions()
                     highlightStyle          = { type = "select", name = "Highlight style", order = 6, values = highlightStyles, get = function() return self.db.profile.highlightStyle or "goldbrackets" end, set = function(info, v) self.db.profile.highlightStyle = v end },
                     highlightBackgroundColour = { type = "color", name = "Highlight background colour", order = 7, hasAlpha = true, hidden = function() return (self.db.profile.highlightStyle or "goldbrackets") ~= "background" end, get = function() local c = self.db.profile.highlightBackgroundColour or { r = 0.4, g = 0.2, b = 0.7, a = 0.25 } return c.r or 0.4, c.g or 0.2, c.b or 0.7, c.a or 0.25 end, set = function(info, r, g, b, a) self.db.profile.highlightBackgroundColour = { r = r, g = g, b = b, a = a } end },
 
-                    previewHighlight = { type = "execute", name = "Preview highlighted item", order = 8, desc = "Show a single highlighted item using the current highlight settings.", func = function() ClearPreviewLines(); local highlightName = "|cff00ff00Highlighted Preview Item|r"; AddOrUpdateLoot("PREVIEW_HIGHLIGHT_ITEM", "Interface\\Icons\\INV_Misc_Rune_01", highlightName, 1, false, false, false, true, nil) end },
+                    previewHighlight = { type = "execute", name = "Preview highlighted item", order = 8, desc = "Show a single highlighted item using the current highlight settings.", func = function() ClearPreviewLines(); local highlightName = "|cff00ff00Highlighted Preview Item|r"; AddOrUpdateLoot("PREVIEW_HIGHLIGHT_ITEM", "Interface\\Icons\\INV_Misc_Rune_01", highlightName, 1, false, false, true, nil) end },
 
                     listsHeader   = { type = "header",      name = "Lists", order = 10 },
-                    blacklistDesc = { type = "description", name = "Blacklisted items are never shown. Enter exact names or use '*' wildcards (case-insensitive). You can also enter numeric IDs or prefixes like CURRENCY:123.", order = 11 },
-                    blacklist     = { type = "input", multiline = true, width = "full", name = "Blacklisted Items", desc = "Comma or newline separated. Example: Silk Cloth, Silk*, 12345, CURRENCY:789", order = 12, get = function() return self.db.profile.blacklist end, set = function(info, v) self.db.profile.blacklist = v UpdateParsedLists() end },
+                    blacklistDesc = { type = "description", name = "Blacklisted items are never shown. Enter exact names or use '*' wildcards (case-insensitive). You can also enter numeric item IDs.", order = 11 },
+                    blacklist     = { type = "input", multiline = true, width = "full", name = "Blacklisted Items", desc = "Comma or newline separated. Example: Silk Cloth, Silk*, 12345", order = 12, get = function() return self.db.profile.blacklist end, set = function(info, v) self.db.profile.blacklist = v UpdateParsedLists() end },
 
                     highlightDesc = { type = "description", name = "Highlighted items are shown with a visual indicator and optionally play a sound. Use exact names or '*' wildcards (case-insensitive).", order = 20 },
                     highlight     = { type = "input", multiline = true, width = "full", name = "Highlighted Items", desc = "Comma or newline separated. Example: Opulent Bracers, *cloth, REPUTATION:123", order = 21, get = function() return self.db.profile.highlight end, set = function(info, v) self.db.profile.highlight = v UpdateParsedLists() end },
@@ -1669,7 +1747,6 @@ function PrettyLoot:CHAT_MSG_LOOT(event, message)
         text = colorCode .. itemName .. "|r",
         qty = quantity,
         isMoney = false,
-        isCurrency = false,
         itemLink = itemLink,
     })
 end
@@ -1796,6 +1873,28 @@ function PrettyLoot:CHAT_MSG_SYSTEM(event, message)
     })
 end
 
+function PrettyLoot:CHAT_MSG_COMBAT_HONOR_GAIN(event, message)
+    if not self.db.profile.trackHonour or not message then return end
+
+    -- "%s dies, honorable kill Rank: %s (Estimated Honor Points: %d)"
+    local amount = tonumber(string.match(message, "%(Estimated Honor Points: (%d+)%)"))
+
+    -- "You have been awarded %d honor points."
+    if not amount then
+        amount = tonumber(string.match(message, "You have been awarded (%d+) honor points%."))
+    end
+
+    if not amount or amount <= 0 then return end
+
+    QueueEvent({
+        key      = "HONOUR_SESSION",
+        icon     = nil,
+        text     = "|cffffd700Honour|r",
+        qty      = amount,
+        isHonour = true,
+    })
+end
+
 -- =========================================================================
 -- Initialisation
 -- =========================================================================
@@ -1864,6 +1963,7 @@ end
 function PrettyLoot:OnEnable()
     self:RegisterEvent("CHAT_MSG_LOOT")
     self:RegisterEvent("CHAT_MSG_SYSTEM")
+    self:RegisterEvent("CHAT_MSG_COMBAT_HONOR_GAIN")
     self:RegisterEvent("PLAYER_MONEY")
     self:RegisterEvent("PLAYER_ENTERING_WORLD")
     self:RegisterEvent("CHAT_MSG_COMBAT_FACTION_CHANGE")
