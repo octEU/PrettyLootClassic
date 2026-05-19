@@ -2,7 +2,7 @@
 ## Title: PrettyLoot
 ## Notes: Clean and modern loot display.
 ## Author: Oct
-## Version: 1.0
+## Version: 1.1.0
 
 ## SavedVariables: PrettyLootDB
 ## IconTexture: Interface\Addons\PrettyLoot\Media\prettyloot64.tga
